@@ -1,0 +1,446 @@
+---
+title: "London Bikes Analytics"
+author: "Isabella Madiedo Soto"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: united
+    toc: yes
+    toc_float: yes
+  word_document:
+    toc: yes
+---
+
+# Library Load
+
+```{r setup, message=FALSE}
+
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(htmlwidgets)
+library(leaflet)
+library(mosaic)
+library(scales)
+
+```
+
+# Data Load
+
+This study leverages data from http://www.tfl.gov.uk to analyse London's Bike Sharing System. The objective is to identify and understand significant data patterns which can provide useful insight for the design and characteristics of the sharing system currently in place.
+
+```{r, warning= FALSE, message= FALSE, echo=FALSE}
+
+bike_data <- read_csv(file="../Data/londonBikes2011_2017.csv")
+
+head(bike_data, n=5)
+
+```
+## Data Preprocessing
+
+### Date format
+
+Firstly, in order to maintain consistency across date formats, we use lubridate's `ymd` function to for the variable `Day` to be in the format *YYYY-MM-DD*
+
+```{r, warning= FALSE}
+
+bike_data <- bike_data %>%
+  mutate(
+    Day=ymd(Day)) 
+
+```
+
+### Day of the Week
+
+Secondly we relevel the variable `day_of_week` as an ordered factor from its existing `chr` type. This step identifies the ordered days of the week (starting with Monday) and allows factor treatment.
+
+```{r, warning= FALSE}
+
+bike_data <- bike_data %>%
+  mutate(
+    day_of_week = fct_relevel(day_of_week, "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+
+```
+
+### Season
+
+Thirdly, for increased clarity we update the `season` variable from *1, 2, 3, 4* to *Winter*, *Spring*, *Summer* and *Autumn*
+
+```{r, warning= FALSE}
+
+bike_data <- bike_data %>%
+  mutate(
+    season = case_when(
+      season == 1 ~ "Winter",
+      season == 2 ~ "Spring",
+      season == 3 ~ "Summer",
+      season == 4 ~ "Autumn"
+    ),
+    season = fct_relevel(season, "Winter", "Spring", "Summer", "Autumn")
+  )
+
+```
+
+### Updated Dataset
+
+Laslty, we visualise the data to ensure the changes listed above have been incorporated correctly.
+
+```{r, warning= FALSE}
+
+head(bike_data, n=5)
+
+```
+
+
+# Exploratory Data Analysis
+
+## Time Series: Bikes Hired
+
+```{r, warning= FALSE}
+
+ggplot(bike_data, aes(x = Day, y = bikes_hired)) +
+  geom_point(color = "cornflowerblue", size = 3, alpha = 0.5) + 
+  geom_smooth(method = "loess", color = "blue", linetype = "dotted", se = FALSE) +
+  labs(
+    title = "Sharing Bikes Hired in London 2011 - 2018",
+    x = "",
+    y = "Number of Bikes Hired")  +
+  scale_y_continuous(labels = label_number(scale = 1e-3, suffix = "K")) +
+  theme_minimal(base_size = 10) +  
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+```
+The time series view allows a visual indication of existing intra and inter yearly factors influencing the number of bike hires. The figure above presents a cyclical pattern which repeats for each of the available years. Accompanied by an apparent slight increase in overall bike hiring across the captured timeframe. To further investigate these trends, the corresponding summary statistics are presented below.
+
+## Summary Statistics
+### Bikes Hired Overall
+
+```{r, warning= FALSE}
+
+favstats(~ bikes_hired, data= bike_data)
+
+```
+
+On average, the number of bikes hired on a single day is 25,501. However, the total number can vary from a minimum of 3,531 to a maximum of 73,094, accounting for an standard deviation of 8,813. 
+
+Given the data recorded spans across multiple years it is reasonable to encounter significant variability in the numbers. This can relate to both intra and inter year trends. Firstly, within a same year it is expected that bike hires will drop with lower temperatures (during late Autumn and Winter). Similarly, hires are expected to increase during Spring (when temperatures are leveled) and Summer (when the vacation season is at its peak). Secondly, across years, it is possible to see variance related to the hire programme characterisics. For instance, an increase in bike availability, a change in prices or a change in terms and conditions for the use of bikes.
+
+### Bikes Hired per Year
+
+```{r, warning= FALSE}
+
+favstats(~ bikes_hired | year, data=bike_data)
+
+```
+
+As suggested by the time series graph, the total number of bikes hired per year has been increasing from 2011 to 2018, with a single dip during 2013 of aproximately 4,000 hires. This deep corresponds to a significant increase in riding costs introduce on January 2013. When the 24-hour access increased in price from GBP1 to GBP2.
+
+### Bikes Hired per Season
+
+```{r, warning= FALSE}
+
+favstats(~ bikes_hired | season, data=bike_data)
+
+```
+
+Similarly, as highlighted by the time series figure, Winter and Autumn record the lowest number of bike hires, while Summer and Spring record the highest. Interestingly Summer is the highest despite the high temperatures, which may point towards the vacationing period and increased number of events in and around the London parks.
+
+### Bikes Hired per Month
+
+```{r, warning= FALSE}
+
+favstats(~ bikes_hired | month, data=bike_data)
+
+```
+In accordance with the season overview above, the monthly breakdown support a cyclical yearly pattern closely tied to the change in seasons.
+
+### Bikes Hired per Day of the Week
+
+```{r, warning= FALSE}
+
+favstats(~ bikes_hired | day_of_week, data=bike_data)
+
+```
+Lastly, when reviewing the data from a daily point of view, the results show that bike hires are highest during the week days. This suggests Londoners are keen on using the bike hire scheme for work commute. This insight is fundamental when deciding which new bike hire locations to introduce. Although bikes are also used for recreation (as showed by the still high number of hires during the weekend), the main target remains office commute.
+
+
+## Box Plots
+
+Leveraging box plots, we can delve into further details of seasonal, monthly and week-day trends for bike hires.
+
+```{r, warning= FALSE}
+# Defines a function to plot the required box plots
+gg_boxplot <- function(data, x, y, title) {
+  
+  # Evaluates variable names dynamically
+  x <- rlang::ensym(x)
+  y <- rlang::ensym(y)
+  
+  ggplot(data = data, aes(x = as.factor(!!x), y = !!y, fill = as.factor(!!x))) +
+  geom_boxplot(outlier.color = "blue", outlier.shape = 19, outlier.size = 2) +
+  scale_y_continuous(labels = label_number(scale = 1e-3, suffix = "K")) +
+  labs(
+    title = title,
+    x = "",
+    y = "Number of Bikes Hired"
+  ) +
+  scale_fill_brewer(palette = "Blues") +  
+  theme_minimal(base_size = 10) + 
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "none"
+  )
+  
+}
+```
+
+### Bikes Hired per Season
+```{r, warning= FALSE}
+
+# Filter out NA category
+bike_data_filter_season <- bike_data %>%
+  filter(!is.na(season))
+
+# Box Plot
+gg_boxplot(bike_data_filter_season, season, bikes_hired, "Bikes Hired per Season")
+
+```
+
+### Bikes Hired per Month
+
+```{r, warning= FALSE}
+
+# Filter out NA category
+bike_data_filter_month <- bike_data %>%
+  filter(!is.na(month))
+
+# Box Plot
+gg_boxplot(bike_data_filter_month, month, bikes_hired, "Bikes Hired per Month")
+
+```
+
+
+### Bikes Hired per Day of the Week
+
+```{r, warning= FALSE}
+
+# Filter out NA category
+bike_data_filter_day_week <- bike_data %>%
+  filter(!is.na(day_of_week))
+
+# Box Plot
+gg_boxplot(bike_data_filter_day_week, day_of_week, bikes_hired, "Bikes Hired per Day of the Week")
+
+```
+The box plots above allow the identification of potential outliers across the data while further confirming the cyclical trends present in bike hires across the year. For the weekly view, the boxplot further illustrates that within the work week the days with the highest mean number of hires are Tuesday through Thursday, with Friday slightly below and Monday further below. This trend is reasonable, and likely to be even more prevalent in the years following COVID-19 and hybrid work.
+
+## Min and Max
+As an ad-hoc exercise it is interesting to identify the date with the maximum and minimum number of hires within the available data.
+
+```{r, warning= FALSE}
+
+# Max
+max_date <- bike_data$Day[which.max(bike_data$bikes_hired)]
+max_num <- max(bike_data$bikes_hired, na.rm = TRUE)
+
+# Min
+min_date <- bike_data$Day[which.min(bike_data$bikes_hired)]
+min_num <- min(bike_data$bikes_hired, na.rm = TRUE)
+
+cat("The date with the maximum number of hires was ", format(max_date, "%Y-%m-%d"), " with ", max_num, " total hires. \n")
+cat("The date with the minimum number of hires was ", format(min_date, "%Y-%m-%d"), " with ", min_num, " total hires")
+
+```
+## Density Plot: Bikes Hired per Season
+
+```{r, warning= FALSE}
+
+ggplot(data = bike_data_filter_season, aes(x = season, fill = season)) +
+  geom_density(alpha = 0.4, color = NA) +
+  labs(
+    title = "Bikes Hired Density per Season",
+    x = "",
+    y = "Density"
+  ) +
+  theme_minimal(base_size = 10) + 
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "none"
+  )
+
+```
+From the graph we can initially assume that the number of bikes hired follows a normal distribution for every season. However, the standard deviations do vary from season to season. Winter appears to have the smallest standard deviation while Autumn and summer seem to have the highest. This behaviour is probably correlated to people's preferences, as people might not want to rent a bike during the cold weather of winter, while seasons like summer and Autumn may appear more appealing for a bike ride.
+
+
+## Confidence Intervals
+
+### Winter and Summer
+
+```{r, warning= FALSE}
+
+data_summer <- bike_data %>%
+  filter(season == "Summer") %>%
+  select(bikes_hired)
+
+result_summer <- t.test(data_summer)
+result_summer <- result_summer$conf.int
+
+data_winter <- bike_data %>%
+  filter(season == "Winter") %>%
+  select(bikes_hired)
+
+result_winter <- t.test(data_winter)
+result_winter <- result_winter$conf.int
+
+cat("When calculating the 95% confidence intervals for the average number of bikes hired in Summer and Winter we get: \n Summer [", result_summer, "].\n Winter [", result_winter, "].")
+
+```
+
+Meaning we are 95% sure that the true average number of bikes hired either in Summer or Winter are within the corresponding confidence interval. Therefore, analysing the lower and upper bounds of both confidence intervals (they do not intersect and any point) we could conclude, with 95% confidence, that there is a significant difference between the number of bikes hired in Winter and Summer.
+
+
+### Spring and Autumn
+
+```{r, warning= FALSE}
+
+data_spring <- bike_data %>%
+  filter(season == "Spring") %>%
+  select(bikes_hired)
+
+result_spring <- t.test(data_spring)
+result_spring <- result_spring$conf.int
+
+data_autumn <- bike_data %>%
+  filter(season == "Autumn") %>%
+  select(bikes_hired)
+
+result_autumn <- t.test(data_autumn)
+result_autumn <- result_autumn$conf.int
+
+cat("When calculating the 95% confidence intervals for the average number of bikes hired in Spring and Autumn we get: \n Spring [", result_spring, "].\n Autumn [", result_autumn, "].")
+
+```
+
+Meaning we are 95% sure that the true average number of bikes hired either in Spring or Autumn are within the corresponding confidence interval. Therefore, analysing the lower and upper bounds of both confidence intervals (they do not intersect at any point) we could conclude, with 95% confidence, that there is a significant difference between the number of bikes hired in Spring and Autumn.
+
+
+## The Effect of Weather
+
+The data frame has a number of variables related to weather. Including numerical records for `avg_temp`, `avg_humidity`, `avg_pressure`, and `avg_windspeed`. As well as binary records for `rain`, `fog`, `thunderstorm`, and `snow`. 
+
+Below a visual analysis of the effect of weather variables in the number of bikes hired.
+
+```{r, warning= FALSE}
+# Defines a function to plot the required scatter plots
+
+gg_scatterplot <- function(x, xlabel, title) {
+  
+  # Evaluates variable names dynamically
+  x <- rlang::ensym(x)
+  
+  # Data Filter
+  
+  bike_data_filtered <- bike_data %>%
+  filter(!is.na(!!x))
+  
+  # Scatter plot
+
+  ggplot(bike_data_filtered, aes(x = !!x, y = bikes_hired)) +
+    geom_point(color = "cornflowerblue", size = 3, alpha = 0.5) + 
+    geom_smooth(method = "loess", color = "blue", linetype = "dotted", se = FALSE) +
+    labs(
+      title = title,
+      x = xlabel,
+      y = "Number of Bikes Hired")  +
+    scale_y_continuous(labels = label_number(scale = 1e-3, suffix = "K")) +
+    theme_minimal(base_size = 10) +  
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+}
+
+```
+
+### Average Temperature
+
+```{r}
+
+gg_scatterplot(avg_temp, "Average Temperature (C)", "Number of Bikes Hired vs Average Day Temperature")
+
+```
+
+For the first case: temperature, there appears to be a positive relationship between the variables, meaning a higher temperature attracts more bike hires. However, this relationship is not perfect, in fact when temperature gets above 25 the number of observations reduce 
+dramatically.
+
+### Average Humidity
+
+```{r}
+
+gg_scatterplot(avg_humidity, "Average Humidity (%)", "Number of Bikes Hired vs Average Day Humiduty")
+
+```
+
+For the second case: humidity, the relationship between the variables seems to be negative. Meaning higher levels of humidity lead to lower numbers of bikes hired. 
+
+
+### Average Pressure
+
+```{r}
+
+gg_scatterplot(avg_pressure, "Average Pressure (mbar)", "Number of Bikes Hired vs Average Day Pressure")
+
+```
+
+For the third case: pressure, there does not seem to be a clear relationship between atmospheric pressure and the number of bikes hired. This conclusion derives from the fact observations do not show a clear pattern, instead they are scattered over all possible values (the highest concentration being between 1000 and 1020).
+
+
+### Average Windpseed
+
+```{r}
+
+gg_scatterplot(avg_windspeed, "Windspeed (m/s)", "Number of Bikes Hired vs Average Day Windspeed")
+
+```
+
+For the fourth case: wind speed, once again there is no clear relationship between the variables. Nonetheless, it is worth to mention that for wind speeds above 30 observations drop substantially. 
+
+Overall, results seem to follow people's preferences logically; meaning people are more willing to ride a bike in a warm weather than in a cold one (given the temperature does not get extremely high) and they are also more willing to ride when humidity is low. On the other hand, pressure and wind speed cannot be as easily measured (or felt) as temperature and humidity, therefore, it is rarer for people to base their decision on those factors.
+
+
+### Rain
+
+```{r}
+
+gg_scatterplot(rain, "Rain" , "Number of Bikes Hired vs Rain")
+
+```
+
+### Fog
+
+```{r}
+
+gg_scatterplot(fog, "Fog", "Number of Bikes Hired vs Fog")
+
+```
+
+### Thunderstorm
+
+```{r}
+
+gg_scatterplot(thunderstorm, "Thunderstorm", "Number of Bikes Hired vs Thunderstorm")
+
+```
+
+### Snow
+
+```{r}
+
+gg_scatterplot(snow, "Snow", "Number of Bikes Hired vs Snow")
+
+```
+
+Moreover, concerning the remaining scenarios with categorical values, we can see that most cases also follow people's preferences logically. People are less likely to hire bikes if there is snow, fog or thunder. With rain, however, the difference between rainy and dry days appears as not substantially significant. One explanation is that rain can be very unpredictable, and once people have rented a bike they will ride it whether it starts raining or not.
